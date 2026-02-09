@@ -71,7 +71,7 @@ class QuarkPanFileManager:
         }
         api = "https://drive-pc.quark.cn/1/clouddrive/share/sharepage/token"
         data = {"pwd_id": pwd_id, "passcode": password}
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             timeout = httpx.Timeout(60.0, connect=60.0)
             response = await client.post(
                 api, json=data, params=params, headers=self.headers, timeout=timeout
@@ -91,7 +91,7 @@ class QuarkPanFileManager:
         page = 1
         file_list: list[dict[str, Union[int, str]]] = []
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             while True:
                 params = {
                     "pr": "ucpro",
@@ -158,7 +158,7 @@ class QuarkPanFileManager:
             "__t": get_timestamp(13),
         }
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             timeout = httpx.Timeout(60.0, connect=60.0)
             response = await client.get(
                 "https://drive-pc.quark.cn/1/clouddrive/file/sort",
@@ -188,7 +188,7 @@ class QuarkPanFileManager:
             "fr": "pc",
             "platform": "pc",
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             timeout = httpx.Timeout(60.0, connect=60.0)
             try:
                 response = await client.get(
@@ -226,7 +226,7 @@ class QuarkPanFileManager:
             "dir_init_lock": False,
         }
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             timeout = httpx.Timeout(60.0, connect=60.0)
             response = await client.post(
                 "https://drive-pc.quark.cn/1/clouddrive/file",
@@ -277,7 +277,7 @@ class QuarkPanFileManager:
             "uc_param_str": "",
         }
         data = {"filelist": [fid]}
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             timeout = httpx.Timeout(60.0, connect=60.0)
             response = await client.post(
                 api, json=data, params=params, headers=self.headers, timeout=timeout
@@ -461,7 +461,7 @@ class QuarkPanFileManager:
             "scene": "link",
         }
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             timeout = httpx.Timeout(60.0, connect=60.0)
             response = await client.post(
                 task_url,
@@ -485,7 +485,7 @@ class QuarkPanFileManager:
         pbar: tqdm,
         pbar_lock: asyncio.Lock = None,
     ) -> None:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             timeout = httpx.Timeout(60.0, connect=60.0, read=60.0)
             headers = headers.copy()
             headers["Range"] = f"bytes={start}-{end}"
@@ -535,7 +535,7 @@ class QuarkPanFileManager:
         try:
             # 1. Get Content-Length
             file_size = 0
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=False) as client:
                 timeout = httpx.Timeout(10.0, connect=10.0)
                 try:
                     head_resp = await client.head(
@@ -579,7 +579,8 @@ class QuarkPanFileManager:
                 "unit": "B",
                 "unit_scale": True,
                 "desc": os.path.basename(save_path),
-                # "ncols": 100, # Let tqdm detect width or default
+                "ncols": 80,  # Fixed width to prevent staircase effect
+                "ascii": True,  # Use ASCII characters for better compatibility
                 "leave": False,
                 "total": file_size if file_size > 0 else None,
                 "mininterval": 1.0,  # Update max once per second to reduce spam
@@ -594,7 +595,7 @@ class QuarkPanFileManager:
             # 2. Decide Strategy
             # If file_size is small (<multipart_threshold) or unknown, use single thread
             if file_size <= multipart_threshold * 1024 * 1024:
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(verify=False) as client:
                     timeout = httpx.Timeout(60.0, connect=60.0)
                     async with client.stream(
                         "GET", download_url, headers=headers, timeout=timeout
@@ -690,7 +691,7 @@ class QuarkPanFileManager:
         # - Cancel Share: POST https://drive-pc.quark.cn/1/clouddrive/share/delete (Inferred from file/delete pattern)
 
         for _ in range(2):
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=False) as client:
                 timeout = httpx.Timeout(60.0, connect=60.0)
                 response = await client.post(
                     download_api,
@@ -789,7 +790,7 @@ class QuarkPanFileManager:
                 f"&retry_index={i}&__dt=21192&__t={get_timestamp(13)}"
             )
 
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=False) as client:
                 timeout = httpx.Timeout(60.0, connect=60.0)
                 response = await client.get(
                     submit_url, headers=self.headers, timeout=timeout
@@ -849,22 +850,13 @@ class QuarkPanFileManager:
         temp_dir_fid = None
         created_shares = []
 
+        # Use a random temp directory name to avoid "Content Violation" flags
+        self.TEMP_DIR_NAME = f"_Download_{generate_random_code()}"
         custom_print(f"=== 步骤0: 准备临时目录 {self.TEMP_DIR_NAME} ===")
-        # 0. Check and create temp dir
-        root_files = await self.get_sorted_file_list(pdir_fid="0")
-        if root_files and "data" in root_files and "list" in root_files["data"]:
-            for item in root_files["data"]["list"]:
-                if item["file_name"] == self.TEMP_DIR_NAME and item["dir"]:
-                    custom_print(
-                        f"发现已存在临时目录 {self.TEMP_DIR_NAME} (FID: {item['fid']})，正在删除..."
-                    )
-                    if not await self.delete_file(item["fid"]):
-                        custom_print(
-                            f"无法删除已存在的临时目录 {self.TEMP_DIR_NAME}，无法继续。",
-                            error_msg=True,
-                        )
-                        sys.exit(102)  # Exit code 102: Temp Dir Creation/Prep Failed
-                    break
+
+        # 0. Check and create temp dir (search for any old temp dirs and clean if possible, but focus on new one)
+        # We won't aggressively delete old ones here to avoid deleting user data by mistake,
+        # but using a unique name prevents conflicts.
 
         # Create temp dir WITHOUT updating global config to preserve Option 1 settings
         temp_dir_fid = await self.create_dir(self.TEMP_DIR_NAME, update_config=False)
@@ -1128,7 +1120,7 @@ class QuarkPanFileManager:
             "uc_param_str": "",
         }
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             timeout = httpx.Timeout(60.0, connect=60.0)
             response = await client.post(
                 "https://drive-pc.quark.cn/1/clouddrive/share",
@@ -1144,23 +1136,51 @@ class QuarkPanFileManager:
             return json_data["data"]["task_id"]
 
     async def get_share_id(self, task_id: str) -> str:
-        params = {
-            "pr": "ucpro",
-            "fr": "pc",
-            "uc_param_str": "",
-            "task_id": task_id,
-            "retry_index": "0",
-        }
-        async with httpx.AsyncClient() as client:
-            timeout = httpx.Timeout(60.0, connect=60.0)
-            response = await client.get(
-                "https://drive-pc.quark.cn/1/clouddrive/task",
-                params=params,
-                headers=self.headers,
-                timeout=timeout,
-            )
-            json_data = response.json()
-            return json_data["data"]["share_id"]
+        for i in range(20):  # Retry loop for async task completion
+            params = {
+                "pr": "ucpro",
+                "fr": "pc",
+                "uc_param_str": "",
+                "task_id": task_id,
+                "retry_index": str(i),
+            }
+            async with httpx.AsyncClient(verify=False) as client:
+                timeout = httpx.Timeout(60.0, connect=60.0)
+                response = await client.get(
+                    "https://drive-pc.quark.cn/1/clouddrive/task",
+                    params=params,
+                    headers=self.headers,
+                    timeout=timeout,
+                )
+                json_data = response.json()
+                data = json_data.get("data", {})
+
+                if not data:
+                    await asyncio.sleep(1)
+                    continue
+
+                # Status 2 seems to be success for tasks
+                if "share_id" in data:
+                    return data["share_id"]
+                
+                status = data.get("status")
+                if status == 2:
+                    # Should have share_id, but if not, maybe next poll?
+                    pass
+                elif status == 0:
+                    # Pending/Running
+                    await asyncio.sleep(1)
+                    continue
+                else:
+                    # Failure status
+                    custom_print(
+                        f"获取share_id失败 (Task Status {status}): {json_data}",
+                        error_msg=True,
+                    )
+                    raise Exception(f"Share task failed with status {status}")
+        
+        custom_print(f"获取share_id超时: {json_data}", error_msg=True)
+        raise Exception("Timeout waiting for share_id")
 
     async def submit_share(self, share_id: str) -> tuple:
         params = {
@@ -1172,7 +1192,7 @@ class QuarkPanFileManager:
         json_data = {
             "share_id": share_id,
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=False) as client:
             timeout = httpx.Timeout(60.0, connect=60.0)
             response = await client.post(
                 "https://drive-pc.quark.cn/1/clouddrive/share/password",
@@ -1198,8 +1218,8 @@ class QuarkPanFileManager:
             "fr": "pc",
             "uc_param_str": "",
         }
-        data = {"share_id_list": [share_id]}
-        async with httpx.AsyncClient() as client:
+        data = {"share_ids": [share_id]}
+        async with httpx.AsyncClient(verify=False) as client:
             timeout = httpx.Timeout(60.0, connect=60.0)
             response = await client.post(
                 api, json=data, params=params, headers=self.headers, timeout=timeout
@@ -1212,7 +1232,7 @@ class QuarkPanFileManager:
                     return True
                 else:
                     custom_print(
-                        f"取消分享失败 (API返回错误): {json_data.get('message', 'Unknown error')}",
+                        f"取消分享失败 (API返回错误): {json_data}",
                         error_msg=True,
                     )
                     return False
