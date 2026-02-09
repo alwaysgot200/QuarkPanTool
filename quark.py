@@ -1162,7 +1162,7 @@ class QuarkPanFileManager:
                 # Status 2 seems to be success for tasks
                 if "share_id" in data:
                     return data["share_id"]
-                
+
                 status = data.get("status")
                 if status == 2:
                     # Should have share_id, but if not, maybe next poll?
@@ -1178,7 +1178,7 @@ class QuarkPanFileManager:
                         error_msg=True,
                     )
                     raise Exception(f"Share task failed with status {status}")
-        
+
         custom_print(f"获取share_id超时: {json_data}", error_msg=True)
         raise Exception("Timeout waiting for share_id")
 
@@ -1552,10 +1552,25 @@ def print_menu() -> None:
         "╠══════════════════════════════════════════════════════════════════════════════════════════════════════╣"
     )
     print(
-        "║     1.分享地址转存文件   2.批量生成分享链接   3.切换网盘保存目录   4.创建网盘文件夹   5.下载到本地   6.登录        ║"
+        "║     1.分享地址转存文件                                                                                  ║"
     )
     print(
-        "║     7.一键下载他人分享链接(功能1+2+5)                                                                ║"
+        "║     2.批量生成分享链接                                                                                  ║"
+    )
+    print(
+        "║     3.切换网盘保存目录                                                                                  ║"
+    )
+    print(
+        "║     4.创建网盘文件夹                                                                                    ║"
+    )
+    print(
+        "║     5.下载到本地                                                                                       ║"
+    )
+    print(
+        "║     6.登录                                                                                            ║"
+    )
+    print(
+        "║     7.一键下载他人分享链接(功能1+2+5)                                                                    ║"
     )
     print(
         "╚══════════════════════════════════════════════════════════════════════════════════════════════════════╝"
@@ -1565,9 +1580,12 @@ def print_menu() -> None:
 if __name__ == "__main__":
     # CLI Argument Parsing
     parser = argparse.ArgumentParser(description="QuarkPanTool Automation")
-    parser.add_argument("--save", help="Save directory ID (default: 0)", default="0")
     parser.add_argument("--download", help="Shared URL to download")
+    parser.add_argument("--cookie", help="Cookie string to use")
     args, unknown = parser.parse_known_args()
+
+    if args.cookie:
+        save_config(f"{CONFIG_DIR}/cookies.txt", args.cookie)
 
     quark_file_manager = QuarkPanFileManager(headless=False, slow_mo=500)
 
@@ -1579,8 +1597,6 @@ if __name__ == "__main__":
         user_name = asyncio.run(quark_file_manager.get_user_info())
         # We need to ensure config is loaded/initialized
         asyncio.run(quark_file_manager.load_folder_id())
-
-        # Note: We now ignore args.save and enforce use of temporary directory in one_click_download_pipeline
 
         custom_print(f"自动化模式启动")
         custom_print(f"目标URL: {args.download}")
