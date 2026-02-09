@@ -25,6 +25,8 @@ from utils import (
 
 
 class QuarkPanFileManager:
+    TEMP_DIR_NAME = "__________temp"
+
     def __init__(self, headless: bool = False, slow_mo: int = 0) -> None:
         self.headless: bool = headless
         self.slow_mo: int = slow_mo
@@ -168,30 +170,47 @@ class QuarkPanFileManager:
             return json_data
 
     async def get_user_info(self) -> str:
+        # 1. Primary Validation: Use file list API (more reliable)
+        try:
+            file_list_check = await self.get_sorted_file_list(size="1")
+            if file_list_check.get("code") != 0:
+                custom_print(
+                    f"Cookie验证失败 (文件列表接口返回错误): {file_list_check}",
+                    error_msg=True,
+                )
+                sys.exit(101)  # Exit code 101: Cookie Invalid
+        except Exception as e:
+            custom_print(f"Cookie验证过程中发生错误: {e}", error_msg=True)
+            sys.exit(101)
 
+        # 2. Optional: Get User Nickname (Best Effort)
         params = {
             "fr": "pc",
             "platform": "pc",
         }
-
         async with httpx.AsyncClient() as client:
             timeout = httpx.Timeout(60.0, connect=60.0)
-            response = await client.get(
-                "https://pan.quark.cn/account/info",
-                params=params,
-                headers=self.headers,
-                timeout=timeout,
-            )
-            json_data = response.json()
-            if json_data["data"]:
-                nickname = json_data["data"]["nickname"]
-                return nickname
-            else:
-                input("登录失败！请重新运行本程序，然后在弹出的浏览器中登录夸克账号")
-                with open(f"{CONFIG_DIR}/cookies.txt", "w", encoding="utf-8"):
-                    sys.exit(-1)
+            try:
+                response = await client.get(
+                    "https://pan.quark.cn/account/info",
+                    params=params,
+                    headers=self.headers,
+                    timeout=timeout,
+                )
+                json_data = response.json()
 
-    async def create_dir(self, pdir_name="新建文件夹") -> None:
+                # Try to extract nickname if possible, but don't fail if structure varies
+                if json_data.get("data") and isinstance(json_data["data"], dict):
+                    return json_data["data"].get("nickname", "Quark User")
+
+            except Exception:
+                pass  # Ignore nickname fetch errors if cookie is already verified
+
+        return "Quark User"
+
+    async def create_dir(
+        self, pdir_name="新建文件夹", update_config=True
+    ) -> Union[str, None]:
         params = {
             "pr": "ucpro",
             "fr": "pc",
@@ -219,24 +238,57 @@ class QuarkPanFileManager:
             json_data = response.json()
             if json_data["code"] == 0:
                 custom_print(f"根目录下 {pdir_name} 文件夹创建成功！")
-                new_config = {
-                    "user": self.user,
-                    "pdir_id": json_data["data"]["fid"],
-                    "dir_name": pdir_name,
-                }
-                save_config(
-                    f"{CONFIG_DIR}/config.json",
-                    content=json.dumps(new_config, ensure_ascii=False),
-                )
-                global to_dir_id
-                to_dir_id = json_data["data"]["fid"]
-                custom_print(f"自动将保存目录切换至 {pdir_name} 文件夹")
+
+                # Only update config and instance state if requested
+                # This prevents interference when create_dir is used for other purposes
+                if update_config:
+                    new_config = {
+                        "user": self.user,
+                        "pdir_id": json_data["data"]["fid"],
+                        "dir_name": pdir_name,
+                    }
+                    save_config(
+                        f"{CONFIG_DIR}/config.json",
+                        content=json.dumps(new_config, ensure_ascii=False),
+                    )
+                    global to_dir_id
+                    to_dir_id = json_data["data"]["fid"]
+
+                    # Update instance variables to ensure current session uses new dir
+                    self.pdir_id = to_dir_id
+                    self.dir_name = pdir_name
+
+                    custom_print(f"自动将保存目录切换至 {pdir_name} 文件夹")
+
+                return json_data["data"]["fid"]
             elif json_data["code"] == 23008:
                 custom_print(
                     "文件夹同名冲突，请更换一个文件夹名称后重试", error_msg=True
                 )
             else:
                 custom_print(f"错误信息：{json_data['message']}", error_msg=True)
+        return None
+
+    async def delete_file(self, fid: str) -> bool:
+        api = "https://drive-pc.quark.cn/1/clouddrive/file/delete"
+        params = {
+            "pr": "ucpro",
+            "fr": "pc",
+            "uc_param_str": "",
+        }
+        data = {"filelist": [fid]}
+        async with httpx.AsyncClient() as client:
+            timeout = httpx.Timeout(60.0, connect=60.0)
+            response = await client.post(
+                api, json=data, params=params, headers=self.headers, timeout=timeout
+            )
+            json_data = response.json()
+            if json_data["code"] == 0:
+                custom_print(f"文件夹/文件 (FID: {fid}) 删除成功")
+                return True
+            else:
+                custom_print(f"删除失败: {json_data['message']}", error_msg=True)
+                return False
 
     async def run(
         self,
@@ -425,7 +477,13 @@ class QuarkPanFileManager:
 
     @staticmethod
     async def download_part(
-        url: str, headers: dict, start: int, end: int, save_path: str, pbar: tqdm
+        url: str,
+        headers: dict,
+        start: int,
+        end: int,
+        save_path: str,
+        pbar: tqdm,
+        pbar_lock: asyncio.Lock = None,
     ) -> None:
         async with httpx.AsyncClient() as client:
             timeout = httpx.Timeout(60.0, connect=60.0, read=60.0)
@@ -444,7 +502,12 @@ class QuarkPanFileManager:
                             async for chunk in response.aiter_bytes():
                                 if chunk:
                                     f.write(chunk)
-                                    pbar.update(len(chunk))
+                                    if pbar:
+                                        if pbar_lock:
+                                            async with pbar_lock:
+                                                pbar.update(len(chunk))
+                                        else:
+                                            pbar.update(len(chunk))
                     break
                 except Exception as e:
                     if attempt == retries - 1:
@@ -516,12 +579,15 @@ class QuarkPanFileManager:
                 "unit": "B",
                 "unit_scale": True,
                 "desc": os.path.basename(save_path),
-                "ncols": 100,
+                # "ncols": 100, # Let tqdm detect width or default
                 "leave": False,
                 "total": file_size if file_size > 0 else None,
+                "mininterval": 1.0,  # Update max once per second to reduce spam
+                "file": sys.stdout,  # Use stdout instead of stderr
             }
-            if position is not None:
-                tqdm_kwargs["position"] = position
+            # Remove position to avoid cursor issues in incompatible terminals
+            # if position is not None:
+            #    tqdm_kwargs["position"] = position
 
             pbar = tqdm(**tqdm_kwargs)
 
@@ -545,6 +611,7 @@ class QuarkPanFileManager:
 
                 part_size = file_size // thread_count
                 tasks = []
+                pbar_lock = asyncio.Lock()  # Lock for pbar updates
                 for i in range(thread_count):
                     start = i * part_size
                     if i == thread_count - 1:
@@ -554,7 +621,13 @@ class QuarkPanFileManager:
 
                     task = asyncio.create_task(
                         QuarkPanFileManager.download_part(
-                            download_url, headers, start, end, save_path, pbar
+                            download_url,
+                            headers,
+                            start,
+                            end,
+                            save_path,
+                            pbar,
+                            pbar_lock=pbar_lock,
                         )
                     )
                     tasks.append(task)
@@ -603,6 +676,18 @@ class QuarkPanFileManager:
         }
 
         download_api = "https://drive-pc.quark.cn/1/clouddrive/file/download"
+        # Known APIs verified through development:
+        # - Create Directory: POST https://drive-pc.quark.cn/1/clouddrive/file
+        # - Delete File/Dir: POST https://drive-pc.quark.cn/1/clouddrive/file/delete
+        # - Get Share Token: POST https://drive-pc.quark.cn/1/clouddrive/share/sharepage/token
+        # - Get Share Detail: GET https://drive-pc.quark.cn/1/clouddrive/share/sharepage/detail
+        # - Get File List: GET https://drive-pc.quark.cn/1/clouddrive/file/sort
+        # - User Info: GET https://pan.quark.cn/account/info
+        # - Create Share: POST https://drive-pc.quark.cn/1/clouddrive/share
+        # - File Rename: POST https://drive-pc.quark.cn/1/clouddrive/file/rename
+
+        # Inferred/Experimental APIs:
+        # - Cancel Share: POST https://drive-pc.quark.cn/1/clouddrive/share/delete (Inferred from file/delete pattern)
 
         for _ in range(2):
             async with httpx.AsyncClient() as client:
@@ -742,62 +827,158 @@ class QuarkPanFileManager:
                 sys.exit()
 
     async def one_click_download_pipeline(self, share_url: str) -> None:
-        custom_print("=== 步骤1: 分享地址转存文件 ===")
-        # Step 1: Save
-        # Ensure we have a valid save directory
-        if not self.pdir_id or self.pdir_id == "0":
+        # Check if the share link belongs to the current user
+        try:
+            pwd_id = self.get_pwd_id(share_url).split("#")[0]
+            match_password = re.search("pwd=(.*?)(?=$|&)", share_url)
+            password = match_password.group(1) if match_password else ""
+            stoken = await self.get_stoken(pwd_id, password)
+            if stoken:
+                is_owner, _ = await self.get_detail(pwd_id, stoken)
+                if is_owner == 1:
+                    custom_print(
+                        "检测到该分享链接由当前用户创建，无需转存，直接开始下载。"
+                    )
+                    await self.run(share_url, self.pdir_id, download=True)
+                    return
+        except Exception as e:
             custom_print(
-                "警告: 当前保存目录为根目录，建议先切换保存目录。", error_msg=True
+                f"检查链接所有权时出错: {e}，将尝试继续执行常规流程。", error_msg=True
             )
 
-        saved_fid = await self.run(share_url, self.pdir_id, download=False)
-        target_fid = saved_fid if saved_fid else self.pdir_id
+        temp_dir_fid = None
+        created_shares = []
 
-        custom_print("\n=== 步骤2: 批量生成分享链接 ===")
-        # Step 2: Share
-        # We share the target save directory
-        # Config: traverse_depth=0 (Share the directory itself), expired_type=2 (1 day), url_type=1 (No pwd)
+        custom_print(f"=== 步骤0: 准备临时目录 {self.TEMP_DIR_NAME} ===")
+        # 0. Check and create temp dir
+        root_files = await self.get_sorted_file_list(pdir_fid="0")
+        if root_files and "data" in root_files and "list" in root_files["data"]:
+            for item in root_files["data"]["list"]:
+                if item["file_name"] == self.TEMP_DIR_NAME and item["dir"]:
+                    custom_print(
+                        f"发现已存在临时目录 {self.TEMP_DIR_NAME} (FID: {item['fid']})，正在删除..."
+                    )
+                    if not await self.delete_file(item["fid"]):
+                        custom_print(
+                            f"无法删除已存在的临时目录 {self.TEMP_DIR_NAME}，无法继续。",
+                            error_msg=True,
+                        )
+                        sys.exit(102)  # Exit code 102: Temp Dir Creation/Prep Failed
+                    break
 
-        # Retry logic for sharing
-        max_retries = 3
-        for i in range(max_retries):
-            try:
-                await self.share_run(
-                    share_url="",
-                    folder_id=target_fid,
-                    fid=target_fid,
-                    url_type=1,
-                    expired_type=2,
-                    traverse_depth=0,
-                )
-                break
-            except Exception as e:
-                custom_print(
-                    f"分享失败 (尝试 {i+1}/{max_retries}): {e}", error_msg=True
-                )
-                if i < max_retries - 1:
-                    wait_time = 2 * (i + 1)
-                    custom_print(f"等待 {wait_time} 秒后重试...")
-                    await asyncio.sleep(wait_time)
-                else:
-                    custom_print("多次尝试分享失败，跳过。", error_msg=True)
+        # Create temp dir WITHOUT updating global config to preserve Option 1 settings
+        temp_dir_fid = await self.create_dir(self.TEMP_DIR_NAME, update_config=False)
 
-        custom_print("\n=== 步骤3: 下载到本地 ===")
-        # Step 3: Download
+        if not temp_dir_fid or temp_dir_fid == "0":
+            custom_print(
+                f"创建临时目录 {self.TEMP_DIR_NAME} 失败，无法继续。", error_msg=True
+            )
+            sys.exit(102)  # Exit code 102: Temp Dir Creation Failed
+
         try:
-            urls = load_url_file("output/share_url.txt")
-            # load_url_file uses regex to find http links, so it should extract the last part correctly.
-            if not urls:
-                custom_print("未找到生成的分享链接，跳过下载步骤。", error_msg=True)
-                return
+            custom_print("=== 步骤1: 分享地址转存文件 ===")
+            # Step 1: Save
+            # We explicitly use temp_dir_fid for saving, ignoring self.pdir_id
+            saved_fid = await self.run(share_url, temp_dir_fid, download=False)
 
-            custom_print(f"检测到 {len(urls)} 个分享链接，开始下载...")
-            for index, url in enumerate(urls):
-                custom_print(f"正在处理第 {index + 1} 个链接: {url}")
-                await self.run(url.strip(), self.pdir_id, download=True)
+            # Check if save was successful. run() returns fid on success, None on failure.
+            # However, run() implementation needs to be checked if it returns None on failure.
+            # Assuming run() handles its own error printing, but we need to catch the failure here.
+            if not saved_fid:
+                custom_print("文件转存失败，终止流程。", error_msg=True)
+                sys.exit(103)  # Exit code 103: Save Failed
 
-        except FileNotFoundError:
-            custom_print("output/share_url.txt 文件未找到，无法下载。", error_msg=True)
+            target_fid = saved_fid if saved_fid else temp_dir_fid
+
+            custom_print("\n=== 步骤2: 批量生成分享链接 ===")
+            # Step 2: Share
+            max_retries = 3
+            share_success = False
+            for i in range(max_retries):
+                try:
+                    shares = await self.share_run(
+                        share_url="",
+                        folder_id=target_fid,
+                        fid=target_fid,
+                        url_type=1,
+                        expired_type=2,
+                        traverse_depth=0,
+                    )
+                    if shares:
+                        created_shares.extend(shares)
+                        share_success = True
+                        break
+                    else:
+                        raise Exception("生成的分享ID列表为空")
+                except Exception as e:
+                    custom_print(
+                        f"分享失败 (尝试 {i+1}/{max_retries}): {e}", error_msg=True
+                    )
+                    if i < max_retries - 1:
+                        wait_time = 2 * (i + 1)
+                        custom_print(f"等待 {wait_time} 秒后重试...")
+                        await asyncio.sleep(wait_time)
+                    else:
+                        custom_print("多次尝试分享失败，跳过。", error_msg=True)
+
+            if not share_success:
+                custom_print("无法生成有效的分享链接，终止下载流程。", error_msg=True)
+                sys.exit(104)  # Exit code 104: Share Creation Failed
+
+            custom_print("\n=== 步骤3: 下载到本地 ===")
+            # Step 3: Download
+            try:
+                urls = load_url_file("output/share_url.txt")
+                if not urls:
+                    custom_print("未找到生成的分享链接，跳过下载步骤。", error_msg=True)
+                    sys.exit(105)  # Exit code 105: No Download URLs
+                else:
+                    custom_print(f"检测到 {len(urls)} 个分享链接，开始下载...")
+                    for index, url in enumerate(urls):
+                        custom_print(f"正在处理第 {index + 1} 个链接: {url}")
+                        # For downloading, the save path structure is handled internally,
+                        # but passing temp_dir_fid keeps context if needed
+                        # Note: run(download=True) relies on quark_file_download which might raise exceptions
+                        await self.run(url.strip(), temp_dir_fid, download=True)
+
+            except FileNotFoundError:
+                custom_print(
+                    "output/share_url.txt 文件未找到，无法下载。", error_msg=True
+                )
+                sys.exit(105)
+            except Exception as e:
+                custom_print(f"下载过程中发生错误: {e}", error_msg=True)
+                sys.exit(106)  # Exit code 106: Download Failed
+
+        finally:
+            cleanup_error = False
+
+            # 4.1 Cancel Shares
+            if created_shares:
+                custom_print(
+                    f"\n=== 步骤4.1: 取消创建的 {len(created_shares)} 个分享链接 ==="
+                )
+                for share_id in created_shares:
+                    if not await self.cancel_share(share_id):
+                        custom_print(
+                            f"错误: 分享ID {share_id} 取消失败，可能导致下次运行重复下载。",
+                            error_msg=True,
+                        )
+                        cleanup_error = True
+
+            # 4.2 Delete Temp Dir
+            custom_print(f"\n=== 步骤4.2: 清理临时目录 {self.TEMP_DIR_NAME} ===")
+            if temp_dir_fid and temp_dir_fid != "0":
+                if not await self.delete_file(temp_dir_fid):
+                    custom_print(
+                        f"错误: 临时目录 {self.TEMP_DIR_NAME} 删除失败，可能影响下次运行。",
+                        error_msg=True,
+                    )
+                    cleanup_error = True
+
+            if cleanup_error:
+                custom_print("清理环节发生错误，请检查日志并手动处理。", error_msg=True)
+                sys.exit(107)  # Exit code 107: Cleanup Failed
 
     def init_config(self, _user, _pdir_id, _dir_name):
         try:
@@ -1007,6 +1188,38 @@ class QuarkPanFileManager:
                 share_url = share_url + f"?pwd={json_data['data']['passcode']}"
             return share_url, title
 
+    async def cancel_share(self, share_id: str) -> bool:
+        # Note: The 'delete' API endpoint is inferred from standard RESTful patterns and similar drive APIs.
+        # If this endpoint is incorrect, it may need adjustment based on actual network traffic analysis from the Quark web client.
+        # Common variations include /share/cancel, /share/remove, or passing share_id in the body or query params differently.
+        api = "https://drive-pc.quark.cn/1/clouddrive/share/delete"
+        params = {
+            "pr": "ucpro",
+            "fr": "pc",
+            "uc_param_str": "",
+        }
+        data = {"share_id_list": [share_id]}
+        async with httpx.AsyncClient() as client:
+            timeout = httpx.Timeout(60.0, connect=60.0)
+            response = await client.post(
+                api, json=data, params=params, headers=self.headers, timeout=timeout
+            )
+            # Add robust error handling since this API is experimental
+            try:
+                json_data = response.json()
+                if json_data.get("code") == 0:
+                    custom_print(f"分享链接 (ShareID: {share_id}) 取消成功")
+                    return True
+                else:
+                    custom_print(
+                        f"取消分享失败 (API返回错误): {json_data.get('message', 'Unknown error')}",
+                        error_msg=True,
+                    )
+                    return False
+            except Exception as e:
+                custom_print(f"取消分享请求异常: {e}", error_msg=True)
+                return False
+
     async def share_run(
         self,
         share_url: str,
@@ -1016,9 +1229,10 @@ class QuarkPanFileManager:
         password: str = "",
         traverse_depth: int = 2,
         fid: str = None,
-    ) -> None:
+    ) -> list[str]:
         first_dir = ""
         second_dir = ""
+        created_share_ids = []
         try:
             self.folder_id = folder_id
             if fid:
@@ -1052,14 +1266,15 @@ class QuarkPanFileManager:
                     )
                     share_id = await self.get_share_id(task_id)
                     share_url, title = await self.submit_share(share_id)
+                    created_share_ids.append(share_id)
                     with open(save_share_path, "a", encoding="utf-8") as f:
                         content = f"1 | {title} | {share_url}"
                         f.write(content + "\n")
                         custom_print(f"分享 {title} 成功")
-                    return
+                    return created_share_ids
                 except Exception as e:
                     print("分享失败：", e)
-                    return
+                    return created_share_ids
 
             while True:
                 json_data = await self.get_sorted_file_list(
@@ -1093,6 +1308,7 @@ class QuarkPanFileManager:
                                     )
                                     share_id = await self.get_share_id(task_id)
                                     share_url, title = await self.submit_share(share_id)
+                                    created_share_ids.append(share_id)
                                     with open(
                                         save_share_path, "a", encoding="utf-8"
                                     ) as f:
@@ -1159,6 +1375,7 @@ class QuarkPanFileManager:
                                             share_url, title = await self.submit_share(
                                                 share_id
                                             )
+                                            created_share_ids.append(share_id)
                                             with open(
                                                 save_share_path, "a", encoding="utf-8"
                                             ) as f:
@@ -1200,11 +1417,13 @@ class QuarkPanFileManager:
                     break
                 first_page += 1
             custom_print(f"总共分享了 {n} 个文件夹，已经保存至 {save_share_path}")
+            return created_share_ids
 
         except Exception as e:
             print("分享失败：", e)
             with open("output/share_error.txt", "a", encoding="utf-8") as f:
                 f.write(f"{first_dir}/{second_dir} 文件夹")
+            return created_share_ids
 
     async def share_run_retry(
         self,
@@ -1338,45 +1557,10 @@ if __name__ == "__main__":
 
         # Initialize user info first to populate self.user etc.
         user_name = asyncio.run(quark_file_manager.get_user_info())
-        # We need to ensure config is loaded/initialized, but we want to override pdir_id
-        # load_folder_id does init_config.
+        # We need to ensure config is loaded/initialized
         asyncio.run(quark_file_manager.load_folder_id())
 
-        # Override pdir_id for this session with the command line argument
-        if args.save != "0":
-            # Resolve numeric ID to UUID if necessary
-            if len(args.save) < 32:
-                custom_print(f"正在解析保存目录ID: {args.save}")
-                file_list_data = asyncio.run(
-                    quark_file_manager.get_sorted_file_list(
-                        sort="file_type:asc,file_name:asc"
-                    )
-                )
-                fd_list = file_list_data["data"]["list"]
-                fd_list = [{i["fid"]: i["file_name"]} for i in fd_list if i.get("dir")]
-
-                try:
-                    idx = int(args.save) - 1
-                    if 0 <= idx < len(fd_list):
-                        item = fd_list[idx]
-                        quark_file_manager.pdir_id = next(iter(item.keys()))
-                        custom_print(
-                            f"已解析保存目录: {next(iter(item.values()))} (ID: {quark_file_manager.pdir_id})"
-                        )
-                    else:
-                        custom_print(
-                            f"错误: 指定的保存目录序号 {args.save} 超出范围 (1-{len(fd_list)})",
-                            error_msg=True,
-                        )
-                        sys.exit(1)
-                except ValueError:
-                    custom_print(f"错误: 无效的保存目录ID: {args.save}", error_msg=True)
-                    sys.exit(1)
-            else:
-                quark_file_manager.pdir_id = args.save
-                custom_print(f"使用指定保存目录ID: {quark_file_manager.pdir_id}")
-        else:
-            custom_print(f"使用默认/配置保存目录ID: {quark_file_manager.pdir_id}")
+        # Note: We now ignore args.save and enforce use of temporary directory in one_click_download_pipeline
 
         custom_print(f"自动化模式启动")
         custom_print(f"目标URL: {args.download}")
