@@ -1613,12 +1613,13 @@ if __name__ == "__main__":
     parser.add_argument("--download", help="Shared URL to download")
     parser.add_argument("--cookie", help="Cookie string to use")
     parser.add_argument("--path", help="Download directory to save files")
+    parser.add_argument("--headless", action="store_true", help="Run in headless mode")
     args, unknown = parser.parse_known_args()
 
     if args.cookie:
         save_config(f"{CONFIG_DIR}/cookies.txt", args.cookie)
 
-    quark_file_manager = QuarkPanFileManager(headless=False, slow_mo=500)
+    quark_file_manager = QuarkPanFileManager(headless=args.headless, slow_mo=500)
     if args.path and args.path.strip():
         quark_file_manager.save_folder = args.path.strip()
         try:
