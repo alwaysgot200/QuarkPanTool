@@ -37,6 +37,7 @@ class QuarkPanFileManager:
         self.thread_count: int = 5
         self.multipart_threshold: int = 100
         self.concurrent_files: int = 3
+        self.save_folder: str = "output/downloads"
         self.cookies: str = self.get_cookies()
         self.headers: dict[str, str] = {
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko)"
@@ -720,7 +721,7 @@ class QuarkPanFileManager:
                 elif data_list:
                     custom_print("文件下载地址列表获取成功")
 
-                save_folder = "output/downloads"  # if folder else 'downloads'
+                    save_folder = self.save_folder
                 os.makedirs(save_folder, exist_ok=True)
                 n = 0
 
@@ -1582,12 +1583,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="QuarkPanTool Automation")
     parser.add_argument("--download", help="Shared URL to download")
     parser.add_argument("--cookie", help="Cookie string to use")
+    parser.add_argument("--path", help="Download directory to save files")
     args, unknown = parser.parse_known_args()
 
     if args.cookie:
         save_config(f"{CONFIG_DIR}/cookies.txt", args.cookie)
 
     quark_file_manager = QuarkPanFileManager(headless=False, slow_mo=500)
+    if args.path and args.path.strip():
+        quark_file_manager.save_folder = args.path.strip()
+        try:
+            os.makedirs(quark_file_manager.save_folder, exist_ok=True)
+        except Exception:
+            pass
 
     if args.download:
         # Automation Mode

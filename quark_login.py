@@ -4,7 +4,9 @@ from typing import Dict, Union, List
 from playwright.sync_api import sync_playwright
 from retrying import retry
 
-CONFIG_DIR = './config'
+# Ensure config directory is relative to this module (the submodule itself)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_DIR = os.path.join(BASE_DIR, "config")
 os.makedirs(CONFIG_DIR, exist_ok=True)
 
 
@@ -18,7 +20,7 @@ class QuarkLogin:
     def save_cookies(page) -> None:
         cookie = page.context.cookies()
 
-        with open(f'{CONFIG_DIR}/cookies.txt', 'w', encoding='utf-8') as f:
+        with open(f"{CONFIG_DIR}/cookies.txt", "w", encoding="utf-8") as f:
             f.write(str(cookie))
 
     @retry
@@ -32,50 +34,58 @@ class QuarkLogin:
 
         with sync_playwright() as p:
             self.context = p.firefox.launch_persistent_context(
-                './web_browser_data',
+                "./web_browser_data",
                 headless=self.headless,
                 slow_mo=self.slow_mo,
-                args=['--start-maximized'],
-                no_viewport=True
+                args=["--start-maximized"],
+                no_viewport=True,
             )
             page = self.context.pages[0]
-            page.goto('https://pan.quark.cn/')
+            page.goto("https://pan.quark.cn/")
 
-            input("请在弹出的浏览器中登录夸克，登录成功后请勿手动关闭浏览器，回到本界面按 Enter 键继续...")
+            input(
+                "请在弹出的浏览器中登录夸克，登录成功后请勿手动关闭浏览器，回到本界面按 Enter 键继续..."
+            )
             self.save_cookies(page)
 
     @staticmethod
     def cookies_str_to_dict(cookies_str: str) -> Dict[str, str]:
         cookies_dict = {}
-        cookies_list = cookies_str.split('; ')
+        cookies_list = cookies_str.split("; ")
         for cookie in cookies_list:
-            key, value = cookie.split('=', 1)
+            key, value = cookie.split("=", 1)
             cookies_dict[key] = value
         return cookies_dict
 
     @staticmethod
-    def transfer_cookies(cookies_list: List[Dict[str, Union[str, int]]]) -> Dict[str, str]:
+    def transfer_cookies(
+        cookies_list: List[Dict[str, Union[str, int]]],
+    ) -> Dict[str, str]:
         cookies_dict = {}
         for cookie in cookies_list:
-            if 'quark' in cookie['domain']:
-                cookies_dict[cookie['name']] = cookie['value']
+            if "quark" in cookie["domain"]:
+                cookies_dict[cookie["name"]] = cookie["value"]
         return cookies_dict
 
     @staticmethod
     def dict_to_cookie_str(cookies_dict: Dict[str, str]) -> str:
-        cookie_str = '; '.join([f"{key}={value}" for key, value in cookies_dict.items()])
+        cookie_str = "; ".join(
+            [f"{key}={value}" for key, value in cookies_dict.items()]
+        )
         return cookie_str
 
     def check_cookies(self) -> Union[None, Union[Dict[str, str], str]]:
         try:
-            with open(f'{CONFIG_DIR}/cookies.txt', 'r') as f:
+            with open(f"{CONFIG_DIR}/cookies.txt", "r") as f:
                 content = f.read()
 
-            if content and '[' in content:
+            if content and "[" in content:
                 saved_cookies = eval(content)
                 cookies_dict = self.transfer_cookies(saved_cookies)
                 timestamp = int(time.time())
-                if 'expires' in cookies_dict and timestamp > int(cookies_dict['expires']):
+                if "expires" in cookies_dict and timestamp > int(
+                    cookies_dict["expires"]
+                ):
                     return None
                 return cookies_dict
             else:
@@ -88,7 +98,7 @@ class QuarkLogin:
         cookie = self.check_cookies()
         if not cookie:
             self.login()
-            with open(f'{CONFIG_DIR}/cookies.txt', 'r') as f:
+            with open(f"{CONFIG_DIR}/cookies.txt", "r") as f:
                 content = f.read()
                 if not content:
                     return
@@ -102,9 +112,9 @@ class QuarkLogin:
             return cookie
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     quark_login = QuarkLogin(headless=False, slow_mo=500)
     quark_login.login()
     cookies = quark_login.get_cookies()
     # print('Cookie:', cookies)
-    print('登录完成！')
+    print("登录完成！")
