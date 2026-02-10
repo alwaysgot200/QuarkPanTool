@@ -23,6 +23,8 @@ from utils import (
     save_config,
 )
 
+OUTPUT_DIR = os.path.join(os.path.dirname(CONFIG_DIR), "output")
+
 
 class QuarkPanFileManager:
     TEMP_DIR_NAME = "__________temp"
@@ -36,7 +38,7 @@ class QuarkPanFileManager:
         self.dir_name: Union[str, None] = "根目录"
         self.block_size: int = 100
         self.concurrent_files: int = 3
-        self.save_folder: str = "output/downloads"
+        self.save_folder: str = f"{OUTPUT_DIR}/downloads"
         self.cookies: str = self.get_cookies()
         self.headers: dict[str, str] = {
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko)"
@@ -248,7 +250,7 @@ class QuarkPanFileManager:
                         "dir_name": pdir_name,
                     }
                     save_config(
-                        f"{CONFIG_DIR}/config.json",
+                        f"{OUTPUT_DIR}/state.json",
                         content=json.dumps(new_config, ensure_ascii=False),
                     )
                     global to_dir_id
@@ -573,8 +575,8 @@ class QuarkPanFileManager:
             block_size_bytes = block_size * 1024 * 1024
             thread_count = 1
             if file_size > 0:
-                 thread_count = int(file_size / block_size_bytes)
-            
+                thread_count = int(file_size / block_size_bytes)
+
             custom_print(
                 f"文件: {os.path.basename(save_path)}, 大小: {file_size / 1024 / 1024:.2f} MB, 块大小: {block_size} MB, 线程数: {thread_count}"
             )
@@ -924,7 +926,7 @@ class QuarkPanFileManager:
             custom_print("\n=== 步骤3: 下载到本地 ===")
             # Step 3: Download
             try:
-                urls = load_url_file("output/share_url.txt")
+                urls = load_url_file(f"{OUTPUT_DIR}/share_url.txt")
                 if not urls:
                     custom_print("未找到生成的分享链接，跳过下载步骤。", error_msg=True)
                     sys.exit(105)  # Exit code 105: No Download URLs
@@ -939,7 +941,7 @@ class QuarkPanFileManager:
 
             except FileNotFoundError:
                 custom_print(
-                    "output/share_url.txt 文件未找到，无法下载。", error_msg=True
+                    f"{OUTPUT_DIR}/share_url.txt 文件未找到，无法下载。", error_msg=True
                 )
                 sys.exit(105)
             except Exception as e:
@@ -980,7 +982,7 @@ class QuarkPanFileManager:
         """Parse size string with units (MB, GB) to MB integer."""
         if isinstance(size_str, int):
             return size_str
-        
+
         size_str = size_str.upper().strip()
         match = re.match(r"^(\d+)\s*(MB|GB)?$", size_str)
         if not match:
@@ -989,77 +991,96 @@ class QuarkPanFileManager:
                 return int(size_str)
             except ValueError:
                 return 100
-        
+
         value = int(match.group(1))
         unit = match.group(2)
-        
+
         if unit == "GB":
             return value * 1024
         return value
 
     def init_config(self, _user, _pdir_id, _dir_name):
         try:
-            os.makedirs("output", exist_ok=True)
-            json_data = read_config(f"{CONFIG_DIR}/config.json", "json")
-            if json_data:
-                user = json_data.get("user", "jack")
-                if user != _user:
-                    _pdir_id = "0"
-                    _dir_name = "根目录"
-                    # Default block size 100MB
-                    self.block_size = 100
-                    self.concurrent_files = 3
-                    new_config = {
-                        "user": _user,
-                        "pdir_id": _pdir_id,
-                        "dir_name": _dir_name,
-                        "block_size": "100MB",
-                        "concurrent_files": self.concurrent_files,
-                    }
-                    save_config(
-                        f"{CONFIG_DIR}/config.json",
-                        content=json.dumps(new_config, ensure_ascii=False),
-                    )
-                else:
-                    _pdir_id = json_data.get("pdir_id", "0")
-                    _dir_name = json_data.get("dir_name", "根目录")
-                    # Parse block_size from config which might be string with unit
-                    raw_block_size = json_data.get("block_size", 100)
-                    self.block_size = self.parse_size(raw_block_size)
-                    self.concurrent_files = json_data.get("concurrent_files", 3)
+            os.makedirs(OUTPUT_DIR, exist_ok=True)
+            config_path = f"{CONFIG_DIR}/config.json"
+            # State stored in output directory to avoid git tracking
+            state_path = f"{OUTPUT_DIR}/state.json"
 
-                    # Update config file if new parameters are missing
-                    updated = False
-                    if "thread_count" in json_data:
-                        del json_data["thread_count"]
-                        updated = True
-                    if "block_size" not in json_data:
-                        json_data["block_size"] = "100MB"
-                        updated = True
-                    if "multipart_threshold" in json_data:
-                        del json_data["multipart_threshold"]
-                        updated = True
-                    if "concurrent_files" not in json_data:
-                        json_data["concurrent_files"] = self.concurrent_files
-                        updated = True
+            # Load Config
+            try:
+                config_data = read_config(config_path, "json") or {}
+            except (json.decoder.JSONDecodeError, FileNotFoundError):
+                config_data = {}
 
-                    if updated:
-                        save_config(
-                            f"{CONFIG_DIR}/config.json",
-                            content=json.dumps(json_data, ensure_ascii=False),
-                        )
-        except (json.decoder.JSONDecodeError, FileNotFoundError):
-            new_config = {
-                "user": self.user,
-                "pdir_id": self.pdir_id,
-                "dir_name": self.dir_name,
-                "block_size": "100MB",
-                "concurrent_files": self.concurrent_files,
-            }
-            save_config(
-                f"{CONFIG_DIR}/config.json",
-                content=json.dumps(new_config, ensure_ascii=False),
-            )
+            # Load State
+            try:
+                state_data = read_config(state_path, "json") or {}
+            except (json.decoder.JSONDecodeError, FileNotFoundError):
+                state_data = {}
+
+            # Migration: If state is empty but config has state data, migrate it
+            if not state_data and ("pdir_id" in config_data or "user" in config_data):
+                state_data = {
+                    "user": config_data.pop("user", "jack"),
+                    "pdir_id": config_data.pop("pdir_id", "0"),
+                    "dir_name": config_data.pop("dir_name", "根目录"),
+                }
+                save_config(
+                    state_path, content=json.dumps(state_data, ensure_ascii=False)
+                )
+                save_config(
+                    config_path, content=json.dumps(config_data, ensure_ascii=False)
+                )
+
+            # Handle User Switch
+            stored_user = state_data.get("user", "jack")
+            if stored_user != _user:
+                _pdir_id = "0"
+                _dir_name = "根目录"
+                state_data = {"user": _user, "pdir_id": _pdir_id, "dir_name": _dir_name}
+                save_config(
+                    state_path, content=json.dumps(state_data, ensure_ascii=False)
+                )
+            else:
+                _pdir_id = state_data.get("pdir_id", "0")
+                _dir_name = state_data.get("dir_name", "根目录")
+
+            # Handle Config Settings
+            raw_block_size = config_data.get("block_size", "100MB")
+            self.block_size = self.parse_size(raw_block_size)
+            self.concurrent_files = config_data.get("concurrent_files", 3)
+
+            # Update Config if defaults missing
+            updated = False
+            if "block_size" not in config_data:
+                config_data["block_size"] = "100MB"
+                updated = True
+            if "concurrent_files" not in config_data:
+                config_data["concurrent_files"] = self.concurrent_files
+                updated = True
+
+            # Cleanup legacy fields from config if they exist (double check)
+            for field in [
+                "user",
+                "pdir_id",
+                "dir_name",
+                "thread_count",
+                "multipart_threshold",
+            ]:
+                if field in config_data:
+                    del config_data[field]
+                    updated = True
+
+            if updated:
+                save_config(
+                    config_path, content=json.dumps(config_data, ensure_ascii=False)
+                )
+
+        except Exception as e:
+            custom_print(f"Config initialization failed: {e}", error_msg=True)
+            # Ensure defaults
+            pass
+
         return _user, _pdir_id, _dir_name
 
     async def load_folder_id(self, renew=False) -> Union[tuple, None]:
@@ -1082,7 +1103,7 @@ class QuarkPanFileManager:
                     "dir_name": self.dir_name,
                 }
                 save_config(
-                    f"{CONFIG_DIR}/config.json",
+                    f"{OUTPUT_DIR}/state.json",
                     content=json.dumps(new_config, ensure_ascii=False),
                 )
 
@@ -1103,7 +1124,7 @@ class QuarkPanFileManager:
                     )
                     if not num or int(num) > len(fd_list):
                         custom_print("输入序号不存在，保存目录切换失败", error_msg=True)
-                        json_data = read_config(f"{CONFIG_DIR}/config.json", "json")
+                        json_data = read_config(f"{OUTPUT_DIR}/state.json", "json")
                         return json_data["pdir_id"], json_data["dir_name"]
 
                     item = fd_list[int(num) - 1]
@@ -1114,7 +1135,7 @@ class QuarkPanFileManager:
                         "dir_name": self.dir_name,
                     }
                     save_config(
-                        f"{CONFIG_DIR}/config.json",
+                        f"{OUTPUT_DIR}/state.json",
                         content=json.dumps(new_config, ensure_ascii=False),
                     )
 
@@ -1292,10 +1313,10 @@ class QuarkPanFileManager:
             first_page = 1
             n = 0
             error = 0
-            os.makedirs("output", exist_ok=True)
-            save_share_path = "output/share_url.txt"
+            os.makedirs(OUTPUT_DIR, exist_ok=True)
+            save_share_path = f"{OUTPUT_DIR}/share_url.txt"
 
-            safe_copy(save_share_path, "output/share_url_backup.txt")
+            safe_copy(save_share_path, f"{OUTPUT_DIR}/share_url_backup.txt")
             with open(save_share_path, "w", encoding="utf-8"):
                 pass
 
@@ -1371,12 +1392,12 @@ class QuarkPanFileManager:
                             if not share_success:
                                 print("分享失败：", share_error_msg)
                                 save_config(
-                                    "output/share_error.txt",
+                                    f"{OUTPUT_DIR}/share_error.txt",
                                     content=f"{error}.{first_dir} 文件夹\n",
                                     mode="a",
                                 )
                                 save_config(
-                                    "output/retry.txt",
+                                    f"{OUTPUT_DIR}/retry.txt",
                                     content=f"{n} | {first_dir} | {fid}\n",
                                     mode="a",
                                 )
@@ -1441,12 +1462,12 @@ class QuarkPanFileManager:
                                     if not share_success:
                                         print("分享失败：", share_error_msg)
                                         save_config(
-                                            "output/share_error.txt",
+                                            f"{OUTPUT_DIR}/share_error.txt",
                                             content=f"{error}.{first_dir}/{second_dir} 文件夹\n",
                                             mode="a",
                                         )
                                         save_config(
-                                            "output/retry.txt",
+                                            f"{OUTPUT_DIR}/retry.txt",
                                             content=f"{n} | {first_dir} | {second_dir} | {fid}\n",
                                             mode="a",
                                         )
@@ -1468,7 +1489,7 @@ class QuarkPanFileManager:
 
         except Exception as e:
             print("分享失败：", e)
-            with open("output/share_error.txt", "a", encoding="utf-8") as f:
+            with open(f"{OUTPUT_DIR}/share_error.txt", "a", encoding="utf-8") as f:
                 f.write(f"{first_dir}/{second_dir} 文件夹")
             return created_share_ids
 
@@ -1483,7 +1504,7 @@ class QuarkPanFileManager:
         data_list = retry_url.split("\n")
         n = 0
         error = 0
-        save_share_path = "output/retry_share_url.txt"
+        save_share_path = f"{OUTPUT_DIR}/retry_share_url.txt"
         error_data = []
         for i1 in data_list:
             data = i1.split(" | ")
@@ -1519,11 +1540,11 @@ class QuarkPanFileManager:
                     print("分享失败：", share_error_msg)
                     error_data.append(i1)
         error_content = "\n".join(error_data)
-        save_config(path="output/retry.txt", content=error_content, mode="w")
+        save_config(path=f"{OUTPUT_DIR}/retry.txt", content=error_content, mode="w")
 
 
 def clean_share_dir():
-    share_dir = "output"
+    share_dir = OUTPUT_DIR
     if os.path.exists(share_dir):
         for filename in os.listdir(share_dir):
             file_path = os.path.join(share_dir, filename)
@@ -1654,15 +1675,15 @@ if __name__ == "__main__":
                 save_option = input("是否批量转存(1是 2否)：")
                 if save_option and save_option == "1":
                     try:
-                        urls = load_url_file("config/url.txt")
+                        urls = load_url_file(f"{CONFIG_DIR}/url.txt")
                         if not urls:
                             custom_print(
-                                "\n分享地址为空！请先在config/url.txt文件中输入分享地址(一行一个)"
+                                f"\n分享地址为空！请先在{CONFIG_DIR}/url.txt文件中输入分享地址(一行一个)"
                             )
                             continue
 
                         custom_print(
-                            f"\r检测到config/url.txt文件中有{len(urls)}条分享链接"
+                            f"\r检测到{CONFIG_DIR}/url.txt文件中有{len(urls)}条分享链接"
                         )
                         ok = input("请你确认是否开始批量保存(确认请按2):")
                         if ok and ok.strip() == "2":
@@ -1672,7 +1693,7 @@ if __name__ == "__main__":
                                     quark_file_manager.run(url.strip(), to_dir_id)
                                 )
                     except FileNotFoundError:
-                        with open("config/url.txt", "w", encoding="utf-8"):
+                        with open(f"{CONFIG_DIR}/url.txt", "w", encoding="utf-8"):
                             sys.exit(-1)
                 else:
                     url = input("请输入夸克文件分享地址：")
@@ -1687,13 +1708,13 @@ if __name__ == "__main__":
                         continue
                 else:
                     try:
-                        url = read_config(path="output/retry.txt", mode="r")
+                        url = read_config(path=f"{OUTPUT_DIR}/retry.txt", mode="r")
                         if not url:
                             print("\nretry.txt 为空！请检查文件")
                             continue
                     except FileNotFoundError:
-                        save_config("output/retry.txt", content="")
-                        print("\noutput/retry.txt 文件为空！")
+                        save_config(f"{OUTPUT_DIR}/retry.txt", content="")
+                        print(f"\n{OUTPUT_DIR}/retry.txt 文件为空！")
                         continue
 
                 expired_option = {"1": 2, "2": 3, "3": 4, "4": 1}
@@ -1763,10 +1784,10 @@ if __name__ == "__main__":
                                 )
                             )
                         elif is_batch.strip() == "2":
-                            urls = load_url_file("config/url.txt")
+                            urls = load_url_file(f"{CONFIG_DIR}/url.txt")
                             if not urls:
                                 print(
-                                    "\n分享地址为空！请先在config/url.txt文件中输入分享地址(一行一个)"
+                                    f"\n分享地址为空！请先在{CONFIG_DIR}/url.txt文件中输入分享地址(一行一个)"
                                 )
                                 continue
 
@@ -1778,7 +1799,7 @@ if __name__ == "__main__":
                                 )
 
                 except FileNotFoundError:
-                    with open("config/url.txt", "w", encoding="utf-8"):
+                    with open(f"{CONFIG_DIR}/url.txt", "w", encoding="utf-8"):
                         sys.exit(-1)
 
             elif input_text.strip() == "6":
