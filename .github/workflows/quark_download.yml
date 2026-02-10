@@ -7,7 +7,7 @@ on:
 
 jobs:
   download:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
@@ -28,17 +28,20 @@ jobs:
       - name: Run Quark Download
         env:
           QUARK_COOKIE: ${{ secrets.QUARK_COOKIE }}
+          PYTHONIOENCODING: "utf-8"
         run: |
-          if ($env:QUARK_COOKIE) {
-            python quark.py --download "https://pan.quark.cn/s/0c784564ad59#/list/share" --cookie "$env:QUARK_COOKIE"
-          } else {
+          if [[ -n "$QUARK_COOKIE" ]]; then
+            python quark.py --download "https://pan.quark.cn/s/0c784564ad59#/list/share" --cookie "$QUARK_COOKIE"
+          else
             python quark.py --download "https://pan.quark.cn/s/0c784564ad59#/list/share"
-          }
-        shell: pwsh
+          fi
+        shell: bash
 
       - name: Upload Downloads
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: quark-downloads
-          path: output/downloads/
+          path: |
+            output/state.json
+            output/share_url.txt
