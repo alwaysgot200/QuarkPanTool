@@ -1,1 +1,7 @@
-{"user": "翩翩起舞的木瓜", "pdir_id": "0", "dir_name": "根目录", "thread_count": 5, "multipart_threshold": 100, "concurrent_files": 3}
+{
+    "user": "翩翩起舞的木瓜",
+    "pdir_id": "0",
+    "dir_name": "根目录",
+    "block_size": "300MB",
+    "concurrent_files": 3
+}

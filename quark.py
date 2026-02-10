@@ -34,8 +34,7 @@ class QuarkPanFileManager:
         self.user: Union[str, None] = "用户A"
         self.pdir_id: Union[str, None] = "0"
         self.dir_name: Union[str, None] = "根目录"
-        self.thread_count: int = 5
-        self.multipart_threshold: int = 100
+        self.block_size: int = 100
         self.concurrent_files: int = 3
         self.save_folder: str = "output/downloads"
         self.cookies: str = self.get_cookies()
@@ -520,10 +519,9 @@ class QuarkPanFileManager:
         download_url: str,
         save_path: str,
         headers: dict,
-        thread_count: int = 5,
+        block_size: int = 100,
         semaphore: asyncio.Semaphore = None,
         position_queue: asyncio.Queue = None,
-        multipart_threshold: int = 100,
     ) -> None:
         if semaphore:
             await semaphore.acquire()
@@ -571,8 +569,14 @@ class QuarkPanFileManager:
                     custom_print(f"获取文件大小失败: {e}", error_msg=True)
                     pass
 
+            # Calculate thread count
+            block_size_bytes = block_size * 1024 * 1024
+            thread_count = 1
+            if file_size > 0:
+                 thread_count = int(file_size / block_size_bytes)
+            
             custom_print(
-                f"文件: {os.path.basename(save_path)}, 大小: {file_size / 1024 / 1024:.2f} MB, 阈值: {multipart_threshold} MB"
+                f"文件: {os.path.basename(save_path)}, 大小: {file_size / 1024 / 1024:.2f} MB, 块大小: {block_size} MB, 线程数: {thread_count}"
             )
 
             # Setup Progress Bar
@@ -594,8 +598,8 @@ class QuarkPanFileManager:
             pbar = tqdm(**tqdm_kwargs)
 
             # 2. Decide Strategy
-            # If file_size is small (<multipart_threshold) or unknown, use single thread
-            if file_size <= multipart_threshold * 1024 * 1024:
+            # If file_size < block_size, use single thread
+            if file_size < block_size_bytes:
                 async with httpx.AsyncClient(verify=False) as client:
                     timeout = httpx.Timeout(60.0, connect=60.0)
                     async with client.stream(
@@ -734,7 +738,7 @@ class QuarkPanFileManager:
 
                 tasks = []
                 custom_print(
-                    f"开始批量下载 {len(data_list)} 个文件，同时下载数: {MAX_CONCURRENT_FILES}，单文件线程数: {self.thread_count}"
+                    f"开始批量下载 {len(data_list)} 个文件，同时下载数: {MAX_CONCURRENT_FILES}，单文件块大小: {self.block_size}MB"
                 )
 
                 for i in data_list:
@@ -769,10 +773,9 @@ class QuarkPanFileManager:
                             download_url,
                             save_path,
                             headers,
-                            thread_count=self.thread_count,
+                            block_size=self.block_size,
                             semaphore=semaphore,
                             position_queue=position_queue,
-                            multipart_threshold=self.multipart_threshold,
                         )
                     )
                     tasks.append(task)
@@ -973,6 +976,27 @@ class QuarkPanFileManager:
                 custom_print("清理环节发生错误，请检查日志并手动处理。", error_msg=True)
                 sys.exit(107)  # Exit code 107: Cleanup Failed
 
+    def parse_size(self, size_str: Union[str, int]) -> int:
+        """Parse size string with units (MB, GB) to MB integer."""
+        if isinstance(size_str, int):
+            return size_str
+        
+        size_str = size_str.upper().strip()
+        match = re.match(r"^(\d+)\s*(MB|GB)?$", size_str)
+        if not match:
+            # Default to MB if just a number string
+            try:
+                return int(size_str)
+            except ValueError:
+                return 100
+        
+        value = int(match.group(1))
+        unit = match.group(2)
+        
+        if unit == "GB":
+            return value * 1024
+        return value
+
     def init_config(self, _user, _pdir_id, _dir_name):
         try:
             os.makedirs("output", exist_ok=True)
@@ -982,15 +1006,14 @@ class QuarkPanFileManager:
                 if user != _user:
                     _pdir_id = "0"
                     _dir_name = "根目录"
-                    self.thread_count = 5
-                    self.multipart_threshold = 100
+                    # Default block size 100MB
+                    self.block_size = 100
                     self.concurrent_files = 3
                     new_config = {
                         "user": _user,
                         "pdir_id": _pdir_id,
                         "dir_name": _dir_name,
-                        "thread_count": self.thread_count,
-                        "multipart_threshold": self.multipart_threshold,
+                        "block_size": "100MB",
                         "concurrent_files": self.concurrent_files,
                     }
                     save_config(
@@ -1000,17 +1023,21 @@ class QuarkPanFileManager:
                 else:
                     _pdir_id = json_data.get("pdir_id", "0")
                     _dir_name = json_data.get("dir_name", "根目录")
-                    self.thread_count = json_data.get("thread_count", 5)
-                    self.multipart_threshold = json_data.get("multipart_threshold", 100)
+                    # Parse block_size from config which might be string with unit
+                    raw_block_size = json_data.get("block_size", 100)
+                    self.block_size = self.parse_size(raw_block_size)
                     self.concurrent_files = json_data.get("concurrent_files", 3)
 
                     # Update config file if new parameters are missing
                     updated = False
-                    if "thread_count" not in json_data:
-                        json_data["thread_count"] = self.thread_count
+                    if "thread_count" in json_data:
+                        del json_data["thread_count"]
                         updated = True
-                    if "multipart_threshold" not in json_data:
-                        json_data["multipart_threshold"] = self.multipart_threshold
+                    if "block_size" not in json_data:
+                        json_data["block_size"] = "100MB"
+                        updated = True
+                    if "multipart_threshold" in json_data:
+                        del json_data["multipart_threshold"]
                         updated = True
                     if "concurrent_files" not in json_data:
                         json_data["concurrent_files"] = self.concurrent_files
@@ -1026,8 +1053,7 @@ class QuarkPanFileManager:
                 "user": self.user,
                 "pdir_id": self.pdir_id,
                 "dir_name": self.dir_name,
-                "thread_count": self.thread_count,
-                "multipart_threshold": self.multipart_threshold,
+                "block_size": "100MB",
                 "concurrent_files": self.concurrent_files,
             }
             save_config(
