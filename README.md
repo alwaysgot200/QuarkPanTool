@@ -40,8 +40,19 @@ python quark.py
 
 支持的命令行参数：
 
-- --cookie "<Cookie 字符串>"：可选；如传入会写入 config/cookies.txt 并优先使用该值。
-- --download "<分享链接>"：自动化下载模式（同选项 7），直接执行一键下载流程。
+- `--download "<分享链接>"`：自动化下载模式（同选项 7），直接执行一键下载流程。支持带密码的链接（如 `.../s/abcd?pwd=1234`）。
+- `--cookie "<Cookie 字符串>"`：可选；如传入会写入 config/cookies.txt 并优先使用该值。
+- `--path "<本地保存路径>"`：可选；指定下载文件的本地保存目录（默认为 `output/downloads`）。
+
+**示例**：
+
+```bash
+# 基础一键下载
+python quark.py --download "https://pan.quark.cn/s/abcd?pwd=123456"
+
+# 指定 Cookie 和 保存路径
+python quark.py --cookie "你的Cookie" --download "https://pan.quark.cn/s/abcd" --path "D:\Downloads"
+```
 
 ## 首次运行
 
@@ -71,12 +82,18 @@ python quark.py
 - 选项(5)：下载文件到本地。必须是您网盘中的文件。将需要下载的文件或对应文件夹（支持多级）创建分享链接后粘贴到软件进行下载（注意链接要去掉中文汉字）。文件下载成功后保存到程序目录下 `output/downloads` 文件夹。
 - 选项(6)：重新登录账号。可切换登录其他账号。也可手动清空 `config/cookies.txt` 后启动软件以重新登录。
 - 选项(7)：一键下载他人分享链接（自动化）。输入分享地址后，程序将自动执行：
-  - 检测分享是否为当前登录用户所创建；若是，则直接下载。
-  - 若不是：自动创建临时目录 → 转存分享文件至临时目录 → 批量生成分享链接 → 根据生成的链接批量下载到本地 → 取消分享并删除临时目录。
-  - 自动化模式也可通过命令行执行：`python quark.py --download "https://pan.quark.cn/s/xxxx?pwd=yyyyyy"`。
-  - 如需临时指定 Cookie：`python quark.py --cookie "<Cookie字符串>" --download "https://pan.quark.cn/s/xxxx?pwd=yyyyyy"`。
-
-## 注意事项
+  74→ - 检测分享是否为当前登录用户所创建；若是，则直接下载。
+  75→ - 若不是：自动创建临时目录 → 转存分享文件至临时目录 → 批量生成分享链接 → 根据生成的链接批量下载到本地 → 取消分享并删除临时目录。
+  76→ - 自动化模式也可通过命令行执行：
+  77→ `bash
+78→    python quark.py --download "https://pan.quark.cn/s/xxxx?pwd=yyyyyy"
+79→    `
+  80→ - 如需临时指定 Cookie 和保存路径：
+  81→ `bash
+82→    python quark.py --cookie "<Cookie字符串>" --download "https://pan.quark.cn/s/xxxx?pwd=yyyyyy" --path "D:\Downloads"
+83→    `
+  84→
+  85→## 注意事项
 
 - 执行批量转存前，请先在 `config/url.txt` 填写分享地址（一行一个）。
 - 如分享地址有提取码，需在地址末尾加 `?pwd=提取码`（例如 `https://pan.quark.cn/s/abcd?pwd=123456`），程序会自动处理提取码。
