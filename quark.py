@@ -242,14 +242,14 @@ class QuarkPanFileManager:
                 # Only update config and instance state if requested
                 # This prevents interference when create_dir is used for other purposes
                 if update_config:
-                    new_config = {
+                    new_state = {
                         "user": self.user,
                         "pdir_id": json_data["data"]["fid"],
                         "dir_name": pdir_name,
                     }
                     save_config(
-                        f"{CONFIG_DIR}/config.json",
-                        content=json.dumps(new_config, ensure_ascii=False),
+                        "output/state.json",
+                        content=json.dumps(new_state, ensure_ascii=False),
                     )
                     global to_dir_id
                     to_dir_id = json_data["data"]["fid"]
@@ -1000,66 +1000,90 @@ class QuarkPanFileManager:
     def init_config(self, _user, _pdir_id, _dir_name):
         try:
             os.makedirs("output", exist_ok=True)
-            json_data = read_config(f"{CONFIG_DIR}/config.json", "json")
-            if json_data:
-                user = json_data.get("user", "jack")
-                if user != _user:
-                    _pdir_id = "0"
-                    _dir_name = "根目录"
-                    # Default block size 100MB
-                    self.block_size = 100
-                    self.concurrent_files = 3
-                    new_config = {
+            
+            # 1. Handle Config (Static Settings)
+            try:
+                config_data = read_config(f"{CONFIG_DIR}/config.json", "json")
+            except (json.decoder.JSONDecodeError, FileNotFoundError):
+                config_data = {}
+            
+            # Default block size 100MB
+            # Parse block_size from config which might be string with unit
+            raw_block_size = config_data.get("block_size", 100)
+            self.block_size = self.parse_size(raw_block_size)
+            self.concurrent_files = config_data.get("concurrent_files", 3)
+
+            # Update config file if new parameters are missing or need cleanup
+            updated_config = False
+            if "thread_count" in config_data:
+                del config_data["thread_count"]
+                updated_config = True
+            if "block_size" not in config_data:
+                config_data["block_size"] = "100MB"
+                updated_config = True
+            if "multipart_threshold" in config_data:
+                del config_data["multipart_threshold"]
+                updated_config = True
+            if "concurrent_files" not in config_data:
+                config_data["concurrent_files"] = self.concurrent_files
+                updated_config = True
+            
+            # Remove legacy state fields from config if present
+            for field in ["user", "pdir_id", "dir_name"]:
+                if field in config_data:
+                    del config_data[field]
+                    updated_config = True
+
+            if updated_config:
+                save_config(
+                    f"{CONFIG_DIR}/config.json",
+                    content=json.dumps(config_data, ensure_ascii=False),
+                )
+
+            # 2. Handle State (Dynamic User Data)
+            try:
+                state_data = read_config("output/state.json", "json")
+            except (json.decoder.JSONDecodeError, FileNotFoundError):
+                state_data = {}
+
+            saved_user = state_data.get("user", "jack")
+            
+            if saved_user != _user:
+                # User changed, reset state
+                _pdir_id = "0"
+                _dir_name = "根目录"
+                new_state = {
+                    "user": _user,
+                    "pdir_id": _pdir_id,
+                    "dir_name": _dir_name,
+                }
+                save_config(
+                    "output/state.json",
+                    content=json.dumps(new_state, ensure_ascii=False),
+                )
+            else:
+                # User same, load state
+                _pdir_id = state_data.get("pdir_id", "0")
+                _dir_name = state_data.get("dir_name", "根目录")
+                
+                # Ensure state file exists and has correct data
+                if not state_data or "user" not in state_data:
+                     new_state = {
                         "user": _user,
                         "pdir_id": _pdir_id,
                         "dir_name": _dir_name,
-                        "block_size": "100MB",
-                        "concurrent_files": self.concurrent_files,
                     }
-                    save_config(
-                        f"{CONFIG_DIR}/config.json",
-                        content=json.dumps(new_config, ensure_ascii=False),
+                     save_config(
+                        "output/state.json",
+                        content=json.dumps(new_state, ensure_ascii=False),
                     )
-                else:
-                    _pdir_id = json_data.get("pdir_id", "0")
-                    _dir_name = json_data.get("dir_name", "根目录")
-                    # Parse block_size from config which might be string with unit
-                    raw_block_size = json_data.get("block_size", 100)
-                    self.block_size = self.parse_size(raw_block_size)
-                    self.concurrent_files = json_data.get("concurrent_files", 3)
 
-                    # Update config file if new parameters are missing
-                    updated = False
-                    if "thread_count" in json_data:
-                        del json_data["thread_count"]
-                        updated = True
-                    if "block_size" not in json_data:
-                        json_data["block_size"] = "100MB"
-                        updated = True
-                    if "multipart_threshold" in json_data:
-                        del json_data["multipart_threshold"]
-                        updated = True
-                    if "concurrent_files" not in json_data:
-                        json_data["concurrent_files"] = self.concurrent_files
-                        updated = True
-
-                    if updated:
-                        save_config(
-                            f"{CONFIG_DIR}/config.json",
-                            content=json.dumps(json_data, ensure_ascii=False),
-                        )
-        except (json.decoder.JSONDecodeError, FileNotFoundError):
-            new_config = {
-                "user": self.user,
-                "pdir_id": self.pdir_id,
-                "dir_name": self.dir_name,
-                "block_size": "100MB",
-                "concurrent_files": self.concurrent_files,
-            }
-            save_config(
-                f"{CONFIG_DIR}/config.json",
-                content=json.dumps(new_config, ensure_ascii=False),
-            )
+        except Exception as e:
+            custom_print(f"初始化配置出错: {e}", error_msg=True)
+            # Fallback defaults
+            self.block_size = 100
+            self.concurrent_files = 3
+            
         return _user, _pdir_id, _dir_name
 
     async def load_folder_id(self, renew=False) -> Union[tuple, None]:
@@ -1076,14 +1100,14 @@ class QuarkPanFileManager:
             pdir_id = input(f"[{get_datetime()}] 请输入保存位置的文件夹ID(可为空): ")
             if pdir_id == "0":
                 self.dir_name = "根目录"
-                new_config = {
+                new_state = {
                     "user": self.user,
                     "pdir_id": self.pdir_id,
                     "dir_name": self.dir_name,
                 }
                 save_config(
-                    f"{CONFIG_DIR}/config.json",
-                    content=json.dumps(new_config, ensure_ascii=False),
+                    "output/state.json",
+                    content=json.dumps(new_state, ensure_ascii=False),
                 )
 
             elif len(pdir_id) < 32:
@@ -1103,19 +1127,19 @@ class QuarkPanFileManager:
                     )
                     if not num or int(num) > len(fd_list):
                         custom_print("输入序号不存在，保存目录切换失败", error_msg=True)
-                        json_data = read_config(f"{CONFIG_DIR}/config.json", "json")
-                        return json_data["pdir_id"], json_data["dir_name"]
+                        state_data = read_config("output/state.json", "json")
+                        return state_data.get("pdir_id", "0"), state_data.get("dir_name", "根目录")
 
                     item = fd_list[int(num) - 1]
                     self.pdir_id, self.dir_name = next(iter(item.items()))
-                    new_config = {
+                    new_state = {
                         "user": self.user,
                         "pdir_id": self.pdir_id,
                         "dir_name": self.dir_name,
                     }
                     save_config(
-                        f"{CONFIG_DIR}/config.json",
-                        content=json.dumps(new_config, ensure_ascii=False),
+                        "output/state.json",
+                        content=json.dumps(new_state, ensure_ascii=False),
                     )
 
         return self.pdir_id, self.dir_name
