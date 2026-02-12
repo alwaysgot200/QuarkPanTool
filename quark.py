@@ -850,6 +850,7 @@ class QuarkPanFileManager:
 
         temp_dir_fid = None
         created_shares = []
+        download_success = False  # Initialize success flag
 
         # Use a random temp directory name to avoid "Content Violation" flags
         self.TEMP_DIR_NAME = f"_Download_{generate_random_code()}"
@@ -933,6 +934,9 @@ class QuarkPanFileManager:
                         # but passing temp_dir_fid keeps context if needed
                         # Note: run(download=True) relies on quark_file_download which might raise exceptions
                         await self.run(url.strip(), temp_dir_fid, download=True)
+                    
+                    # Mark as success if we get here without exception
+                    download_success = True
 
             except FileNotFoundError:
                 custom_print(
@@ -952,26 +956,32 @@ class QuarkPanFileManager:
                     f"\n=== 步骤4.1: 取消创建的 {len(created_shares)} 个分享链接 ==="
                 )
                 for share_id in created_shares:
-                    if not await self.cancel_share(share_id):
-                        custom_print(
-                            f"错误: 分享ID {share_id} 取消失败，可能导致下次运行重复下载。",
-                            error_msg=True,
-                        )
+                    # 使用 await 并忽略错误，因为已经在 cancel_share 内部捕获了异常
+                    res = await self.cancel_share(share_id)
+                    if not res:
+                        # 即使失败，也不要设为 True 如果我们想完全忽略
+                        # 但为了日志完整性，我们记录它。
+                        # 关键是最后是否 exit(107)
                         cleanup_error = True
 
             # 4.2 Delete Temp Dir
             custom_print(f"\n=== 步骤4.2: 清理临时目录 {self.TEMP_DIR_NAME} ===")
             if temp_dir_fid and temp_dir_fid != "0":
-                if not await self.delete_file(temp_dir_fid):
-                    custom_print(
-                        f"错误: 临时目录 {self.TEMP_DIR_NAME} 删除失败，可能影响下次运行。",
-                        error_msg=True,
-                    )
+                try:
+                    if not await self.delete_file(temp_dir_fid):
+                         cleanup_error = True
+                except Exception as e:
+                    custom_print(f"删除临时目录异常 (已忽略): {e}", error_msg=True)
                     cleanup_error = True
 
             if cleanup_error:
-                custom_print("清理环节发生错误，请检查日志并手动处理。", error_msg=True)
-                sys.exit(107)  # Exit code 107: Cleanup Failed
+                msg = "清理环节发生错误，请检查日志并手动处理。"
+                custom_print(msg, error_msg=True)
+                # Only exit with error if download also failed (or wasn't even attempted/completed)
+                if not download_success:
+                    sys.exit(107)  # Exit code 107: Cleanup Failed
+                else:
+                    custom_print("由于下载已成功，忽略清理错误，正常退出。", error_msg=True)
 
     def parse_size(self, size_str: Union[str, int]) -> int:
         """Parse size string with units (MB, GB) to MB integer."""
@@ -1249,13 +1259,12 @@ class QuarkPanFileManager:
             "uc_param_str": "",
         }
         data = {"share_ids": [share_id]}
-        async with httpx.AsyncClient(verify=False) as client:
-            timeout = httpx.Timeout(60.0, connect=60.0)
-            response = await client.post(
-                api, json=data, params=params, headers=self.headers, timeout=timeout
-            )
-            # Add robust error handling since this API is experimental
-            try:
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                timeout = httpx.Timeout(60.0, connect=60.0)
+                response = await client.post(
+                    api, json=data, params=params, headers=self.headers, timeout=timeout
+                )
                 json_data = response.json()
                 if json_data.get("code") == 0:
                     custom_print(f"分享链接 (ShareID: {share_id}) 取消成功")
@@ -1266,9 +1275,9 @@ class QuarkPanFileManager:
                         error_msg=True,
                     )
                     return False
-            except Exception as e:
-                custom_print(f"取消分享请求异常: {e}", error_msg=True)
-                return False
+        except Exception as e:
+            custom_print(f"取消分享请求异常 (已忽略): {e}", error_msg=True)
+            return False
 
     async def share_run(
         self,
