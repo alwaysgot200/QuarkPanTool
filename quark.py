@@ -247,7 +247,10 @@ class QuarkPanFileManager:
                         "pdir_id": json_data["data"]["fid"],
                         "dir_name": pdir_name,
                     }
-                    save_config("output/state.json", content=json.dumps(new_config, ensure_ascii=False))
+                    save_config(
+                        "output/state.json",
+                        content=json.dumps(new_config, ensure_ascii=False),
+                    )
                     global to_dir_id
                     to_dir_id = json_data["data"]["fid"]
 
@@ -570,8 +573,8 @@ class QuarkPanFileManager:
             block_size_bytes = block_size * 1024 * 1024
             thread_count = 1
             if file_size > 0:
-                 thread_count = int(file_size / block_size_bytes)
-            
+                thread_count = int(file_size / block_size_bytes)
+
             custom_print(
                 f"文件: {os.path.basename(save_path)}, 大小: {file_size / 1024 / 1024:.2f} MB, 块大小: {block_size} MB, 线程数: {thread_count}"
             )
@@ -934,7 +937,7 @@ class QuarkPanFileManager:
                         # but passing temp_dir_fid keeps context if needed
                         # Note: run(download=True) relies on quark_file_download which might raise exceptions
                         await self.run(url.strip(), temp_dir_fid, download=True)
-                    
+
                     # Mark as success if we get here without exception
                     download_success = True
 
@@ -965,11 +968,13 @@ class QuarkPanFileManager:
                         cleanup_error = True
 
             # 4.2 Delete Temp Dir
-            custom_print(f"\n=== 步骤4.2: 清理临时目录 {self.TEMP_DIR_NAME} ===")
+            custom_print(
+                f"\n=== 步骤4.2: 清理夸克云盘临时目录 {self.TEMP_DIR_NAME} ==="
+            )
             if temp_dir_fid and temp_dir_fid != "0":
                 try:
                     if not await self.delete_file(temp_dir_fid):
-                         cleanup_error = True
+                        cleanup_error = True
                 except Exception as e:
                     custom_print(f"删除临时目录异常 (已忽略): {e}", error_msg=True)
                     cleanup_error = True
@@ -981,13 +986,15 @@ class QuarkPanFileManager:
                 if not download_success:
                     sys.exit(107)  # Exit code 107: Cleanup Failed
                 else:
-                    custom_print("由于下载已成功，忽略清理错误，正常退出。", error_msg=True)
+                    custom_print(
+                        "由于下载已成功，忽略清理错误，正常退出。", error_msg=True
+                    )
 
     def parse_size(self, size_str: Union[str, int]) -> int:
         """Parse size string with units (MB, GB) to MB integer."""
         if isinstance(size_str, int):
             return size_str
-        
+
         size_str = size_str.upper().strip()
         match = re.match(r"^(\d+)\s*(MB|GB)?$", size_str)
         if not match:
@@ -996,10 +1003,10 @@ class QuarkPanFileManager:
                 return int(size_str)
             except ValueError:
                 return 100
-        
+
         value = int(match.group(1))
         unit = match.group(2)
-        
+
         if unit == "GB":
             return value * 1024
         return value
@@ -1059,7 +1066,11 @@ class QuarkPanFileManager:
                 if user_in_state != _user:
                     _pdir_id = "0"
                     _dir_name = "根目录"
-                    new_state = {"user": _user, "pdir_id": _pdir_id, "dir_name": _dir_name}
+                    new_state = {
+                        "user": _user,
+                        "pdir_id": _pdir_id,
+                        "dir_name": _dir_name,
+                    }
                     save_config(
                         "output/state.json",
                         content=json.dumps(new_state, ensure_ascii=False),
@@ -1100,7 +1111,10 @@ class QuarkPanFileManager:
                     "pdir_id": self.pdir_id,
                     "dir_name": self.dir_name,
                 }
-                save_config("output/state.json", content=json.dumps(new_config, ensure_ascii=False))
+                save_config(
+                    "output/state.json",
+                    content=json.dumps(new_config, ensure_ascii=False),
+                )
 
             elif len(pdir_id) < 32:
                 file_list_data = await self.get_sorted_file_list(
@@ -1120,7 +1134,9 @@ class QuarkPanFileManager:
                     if not num or int(num) > len(fd_list):
                         custom_print("输入序号不存在，保存目录切换失败", error_msg=True)
                         json_data = read_config("output/state.json", "json")
-                        return json_data.get("pdir_id", "0"), json_data.get("dir_name", "根目录")
+                        return json_data.get("pdir_id", "0"), json_data.get(
+                            "dir_name", "根目录"
+                        )
 
                     item = fd_list[int(num) - 1]
                     self.pdir_id, self.dir_name = next(iter(item.items()))
@@ -1129,7 +1145,10 @@ class QuarkPanFileManager:
                         "pdir_id": self.pdir_id,
                         "dir_name": self.dir_name,
                     }
-                    save_config("output/state.json", content=json.dumps(new_config, ensure_ascii=False))
+                    save_config(
+                        "output/state.json",
+                        content=json.dumps(new_config, ensure_ascii=False),
+                    )
 
         return self.pdir_id, self.dir_name
 
