@@ -6,6 +6,7 @@ import random
 import re
 import sys
 import argparse
+import math
 from typing import Any, Union
 
 import httpx
@@ -573,7 +574,9 @@ class QuarkPanFileManager:
             block_size_bytes = block_size * 1024 * 1024
             thread_count = 1
             if file_size > 0:
-                thread_count = int(file_size / block_size_bytes)
+                # Use ceil to ensure we use extra threads for the remainder
+                # e.g., 440MB / 300MB = 1.46 -> ceil -> 2 threads
+                thread_count = math.ceil(file_size / block_size_bytes)
 
             custom_print(
                 f"文件: {os.path.basename(save_path)}, 大小: {file_size / 1024 / 1024:.2f} MB, 块大小: {block_size} MB, 线程数: {thread_count}"
@@ -598,8 +601,8 @@ class QuarkPanFileManager:
             pbar = tqdm(**tqdm_kwargs)
 
             # 2. Decide Strategy
-            # If file_size < block_size, use single thread
-            if file_size < block_size_bytes:
+            # If thread_count is 1, use single thread
+            if thread_count == 1:
                 async with httpx.AsyncClient(verify=False) as client:
                     timeout = httpx.Timeout(60.0, connect=60.0)
                     async with client.stream(
@@ -615,6 +618,9 @@ class QuarkPanFileManager:
                 with open(save_path, "wb") as f:
                     f.truncate(file_size)
 
+                # Ensure minimum part size (e.g., 10MB) to avoid too many small threads
+                # Although we used block_size to calculate thread count, so threads shouldn't be too many.
+                # Just use simple division for now as requested.
                 part_size = file_size // thread_count
                 tasks = []
                 pbar_lock = asyncio.Lock()  # Lock for pbar updates
